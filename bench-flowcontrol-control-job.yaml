@@ -1,0 +1,57 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: vllm-bench-flowcontrol-control
+  namespace: llmd
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: bench
+        image: vllm/vllm-openai:v0.34.0
+        imagePullPolicy: IfNotPresent
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          # Control for bench-flowcontrol-job.yaml: identical load and seeds, but NO objective header.
+          run() { # name concurrency prompts seed
+            timeout 900 vllm bench serve \
+              --backend openai-chat --endpoint /v1/chat/completions \
+              --base-url "$BASE_URL" --model "$MODEL" \
+              --dataset-name random --random-input-len 512 --random-output-len 128 \
+              --num-prompts "$3" --request-rate inf --max-concurrency "$2" --seed "$4" \
+              --percentile-metrics ttft,tpot,e2el \
+              --save-result --result-dir /results --result-filename "$1.json" \
+              > "/results/$1.log" 2>&1 || echo "!!! $1 failed or timed out"
+          }
+          run streamA 64 640 101 &
+          run streamB 320 1600 202 &
+          wait
+          echo ">>> done; results in /results"
+          sleep 3600
+        env:
+        - name: BASE_URL
+          value: "http://qwen-epp.llmd.svc"
+        - name: MODEL
+          value: "Qwen/Qwen3-32B-AWQ"
+        - name: HUGGING_FACE_HUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-token-secret
+              key: token
+        resources:
+          requests:
+            cpu: "2"
+            memory: 4Gi
+          limits:
+            cpu: "4"
+            memory: 8Gi
+        volumeMounts:
+        - name: results
+          mountPath: /results
+      volumes:
+      - name: results
+        emptyDir: {}

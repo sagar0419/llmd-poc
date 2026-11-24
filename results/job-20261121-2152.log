@@ -1,0 +1,23 @@
+# logs of vLLM running 2 pods
+
+>>> concurrency=1 prompts=20 in~512 out=128
+>>> concurrency=2 prompts=20 in~512 out=128
+>>> concurrency=4 prompts=20 in~512 out=128
+>>> concurrency=8 prompts=32 in~512 out=128
+>>> concurrency=16 prompts=64 in~512 out=128
+>>> concurrency=32 prompts=128 in~512 out=128
+>>> concurrency=64 prompts=256 in~512 out=128
+>>> concurrency=128 prompts=512 in~512 out=128
+
+ conc   ok/fail   req/s  outTok/s  TTFT p50  TTFT p99  TPOT p50  TPOT p99   E2E p99  goodput
+--------------------------------------------------------------------------------------------
+    1      20/0    0.36      45.6        55       279      23.9      24.1      3116     0.36
+    2      20/0    0.68      87.2        52       270      23.9      24.7      3297     0.68
+    4      20/0    1.20     153.5       203       642      25.4      27.3      3913     1.20
+    8      32/0    2.10     268.6       221       776      25.6      30.6      4112     2.10
+   16      64/0    3.84     491.6       359      1298      22.7      35.6      5186     3.84
+   32     128/0    5.80     742.5       562      2944      25.2      60.8      8364     4.80
+   64     256/0    7.68     982.8       722      5324      31.0     101.5     15764     5.46
+  128     512/0    9.14    1170.3      1288     12561      44.5     223.2     35209     5.27
+
+Saved /results/bench-20261121-162219.json

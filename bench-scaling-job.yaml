@@ -1,0 +1,64 @@
+# Scaling sweep on the same two H100 pods: throughput vs total requests in flight.
+#   pod0 = one pod directly (no router); router = both pods via llm-d.
+# Shows where one pod saturates (128 slots) and where two pods saturate (256).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: vllm-bench-scaling
+  namespace: llmd
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vllm-bench-scaling
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: bench
+        image: vllm/vllm-openai:v0.34.0
+        imagePullPolicy: IfNotPresent
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          set -u
+          POD0=http://vllm-learn-0.vllm-learn-headless.llmd.svc:8000
+          ROUTER=http://qwen-epp.llmd.svc
+          # bench <name> <url> <concurrency>
+          bench() {
+            n=$(( $3 * 8 )); [ "$n" -lt 1024 ] && n=1024
+            echo ">>> $1 concurrency=$3 prompts=$n $(date -u +%T)"
+            timeout 1200 vllm bench serve \
+              --backend openai-chat --endpoint /v1/chat/completions \
+              --base-url "$2" --model Qwen/Qwen3-32B-AWQ \
+              --dataset-name random --random-input-len 512 --random-output-len 128 \
+              --num-prompts "$n" --request-rate inf --max-concurrency "$3" \
+              --seed "$3" \
+              --percentile-metrics ttft,tpot,itl,e2el,client_queue_time \
+              --save-result --result-dir /results --result-filename "$1_c$3.json" \
+              > "/results/$1_c$3.log" 2>&1 || echo "!!! $1 c=$3 failed or timed out"
+          }
+          for c in 16 32 64 96 128 192 256; do bench pod0 $POD0 $c; done
+          for c in 16 32 64 128 192 256 384; do bench router $ROUTER $c; done
+          echo ">>> done; results in /results (sleeping 1h so they can be copied with kubectl cp)"
+          sleep 3600
+        env:
+        - name: HUGGING_FACE_HUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-token-secret
+              key: token
+        resources:
+          requests:
+            cpu: "2"
+            memory: 4Gi
+          limits:
+            cpu: "4"
+            memory: 8Gi
+        volumeMounts:
+        - name: results
+          mountPath: /results
+      volumes:
+      - name: results
+        emptyDir: {}

@@ -1,0 +1,61 @@
+>>> PHASE r1_P1_pod0_direct start 04:18:31
+SNAP r1_P1_pod0_direct-before pod0 success=0
+SNAP r1_P1_pod0_direct-before pod1 success=0
+SNAP r1_P1_pod0_direct-after pod0 success=1536
+SNAP r1_P1_pod0_direct-after pod1 success=0
+>>> PHASE r1_P1_pod0_direct end 04:22:03 wall_s=211 client_cpu_cores_avg=0.09
+>>> PHASE r1_P2_pod1_direct start 04:22:03
+SNAP r1_P2_pod1_direct-before pod0 success=1536
+SNAP r1_P2_pod1_direct-before pod1 success=0
+SNAP r1_P2_pod1_direct-after pod0 success=1536
+SNAP r1_P2_pod1_direct-after pod1 success=1536
+>>> PHASE r1_P2_pod1_direct end 04:25:31 wall_s=208 client_cpu_cores_avg=0.09
+>>> PHASE r1_P3_both_direct start 04:25:31
+SNAP r1_P3_both_direct-before pod0 success=1536
+SNAP r1_P3_both_direct-before pod1 success=1536
+SNAP r1_P3_both_direct-after pod0 success=3072
+SNAP r1_P3_both_direct-after pod1 success=3072
+>>> PHASE r1_P3_both_direct end 04:29:00 wall_s=208 client_cpu_cores_avg=0.18
+>>> PHASE r1_P4_router_1client start 04:29:00
+SNAP r1_P4_router_1client-before pod0 success=3072
+SNAP r1_P4_router_1client-before pod1 success=3072
+SNAP r1_P4_router_1client-after pod0 success=4613
+SNAP r1_P4_router_1client-after pod1 success=4603
+>>> PHASE r1_P4_router_1client end 04:32:33 wall_s=213 client_cpu_cores_avg=0.13
+>>> PHASE r1_P5_router_2clients start 04:32:33
+SNAP r1_P5_router_2clients-before pod0 success=4613
+SNAP r1_P5_router_2clients-before pod1 success=4603
+SNAP r1_P5_router_2clients-after pod0 success=6153
+SNAP r1_P5_router_2clients-after pod1 success=6135
+>>> PHASE r1_P5_router_2clients end 04:36:03 wall_s=210 client_cpu_cores_avg=0.17
+>>> PHASE r2_P1_pod0_direct start 04:36:03
+SNAP r2_P1_pod0_direct-before pod0 success=6153
+SNAP r2_P1_pod0_direct-before pod1 success=6135
+SNAP r2_P1_pod0_direct-after pod0 success=7689
+SNAP r2_P1_pod0_direct-after pod1 success=6135
+>>> PHASE r2_P1_pod0_direct end 04:39:31 wall_s=208 client_cpu_cores_avg=0.09
+>>> PHASE r2_P2_pod1_direct start 04:39:31
+SNAP r2_P2_pod1_direct-before pod0 success=7689
+SNAP r2_P2_pod1_direct-before pod1 success=6135
+SNAP r2_P2_pod1_direct-after pod0 success=7689
+SNAP r2_P2_pod1_direct-after pod1 success=7671
+>>> PHASE r2_P2_pod1_direct end 04:42:59 wall_s=208 client_cpu_cores_avg=0.09
+>>> PHASE r2_P3_both_direct start 04:42:59
+SNAP r2_P3_both_direct-before pod0 success=7689
+SNAP r2_P3_both_direct-before pod1 success=7671
+SNAP r2_P3_both_direct-after pod0 success=9225
+SNAP r2_P3_both_direct-after pod1 success=9207
+>>> PHASE r2_P3_both_direct end 04:46:27 wall_s=208 client_cpu_cores_avg=0.18
+>>> PHASE r2_P4_router_1client start 04:46:27
+SNAP r2_P4_router_1client-before pod0 success=9225
+SNAP r2_P4_router_1client-before pod1 success=9207
+SNAP r2_P4_router_1client-after pod0 success=10768
+SNAP r2_P4_router_1client-after pod1 success=10736
+>>> PHASE r2_P4_router_1client end 04:49:58 wall_s=211 client_cpu_cores_avg=0.13
+>>> PHASE r2_P5_router_2clients start 04:49:58
+SNAP r2_P5_router_2clients-before pod0 success=10768
+SNAP r2_P5_router_2clients-before pod1 success=10736
+SNAP r2_P5_router_2clients-after pod0 success=12309
+SNAP r2_P5_router_2clients-after pod1 success=12267
+>>> PHASE r2_P5_router_2clients end 04:53:28 wall_s=209 client_cpu_cores_avg=0.18
+>>> done; results in /results (sleeping 1h so they can be copied with kubectl cp)

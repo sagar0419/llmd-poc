@@ -1,0 +1,164 @@
+# llm-d POC: deploy runbook (Qwen3-32B-AWQ on vLLM behind the llm-d standalone router)
+# Run every command from this folder (final/). Run the steps in order and check the
+# "Expect:" line after each one before moving on.
+#
+# PREREQUISITES (cluster-specific, nothing here installs them)
+#   - kubectl + helm 3 on your PATH, kubectl context pointing at the right cluster
+#   - cluster-admin rights (steps 1, 2 and 7 install cluster-wide CRDs)
+#   - at least 2 nodes with a free 80 GB GPU each (the model uses ~72 GB at --gpu-memory-utilization 0.90)
+#   - a default StorageClass (each vLLM pod gets a 40Gi model-cache PVC; ours used "ontap-nke")
+#   - ingress-nginx with IngressClass "nginx", and DNS for the host in ingress.yaml
+#   - Prometheus Operator CRDs (only for podMonitory.yaml; skip that file if you don't have them)
+#   - a Hugging Face token that can download Qwen/Qwen3-32B-AWQ
+#   - outbound access to github.com, ghcr.io, Docker Hub and huggingface.co
+#
+# FILES IN THIS FOLDER
+#   File                                  Step  What it does
+#   ------------------------------------  ----  ---------------------------------------------------------------
+#   llmd-commands.txt                     -     This runbook: ordered deploy, verify, benchmark and rollback commands.
+#   secret.yaml                           4     Template for the Hugging Face token secret (hf-token-secret). Keep real tokens out of it.
+#   statefulset.yaml                      5     The vLLM StatefulSet (2 replicas, Qwen3-32B-AWQ, image v0.34.0, 1 GPU per pod.
+#                                               40Gi model-cache PVC each) plus the headless Service the benchmarks use to reach single pods.
+#   base.values.yaml                      6     Helm values shared by the router chart: Envoy log level and CPU/concurrency settings.
+#   optimized-baseline.values.yaml        6     Helm values for the llm-d endpoint picker: scoring plugins, prefix-cache affinity,
+#                                               flow-control feature gate and the concurrency detector (maxConcurrency).
+#   llm-d-crd-examples.yaml               7     InferenceObjective "interactive" (priority 100) and "batch" (priority -10),
+#                                               and InferenceModelRewrite "qwen-alias" (qwen -> Qwen/Qwen3-32B-AWQ).
+#   ingress.yaml                          9     nginx Ingress that sends the hostname to the router service qwen-epp. No TLS or auth.
+#   podMonitory.yaml                      9     Prometheus PodMonitor that scrapes vLLM metrics from the vllm-learn pods.
+#   app/app.yaml, app.py, Dockerfile      9     Streamlit chat UI: Deployment and Service (app.yaml), the app code, and the image build file.
+#   kustomization.yaml                    9     Applies secret, statefulset, ingress, podMonitor and app together: kubectl apply -k .
+#   bench-job.yaml                        10    Concurrency sweep 1..128 through the router (used for the one-pod, two-pod and kill tests).
+#   bench-job-image.yaml                  10    Early benchmark job that runs the sagar27/vllmbenchmarking image against pod vllm-learn-0.
+#   bench-flowcontrol-job.yaml            10    Priority test: interactive and batch streams sent with objective headers.
+#   bench-flowcontrol-control-job.yaml    10    Same load and seeds as the priority test but without the headers (the control).
+#   bench-doubling-job.yaml               10    Saturated test: each pod directly, both pods directly, and through the router.
+#   bench-scaling-job.yaml                10    Throughput vs requests in flight, for one pod directly and for the router.
+#   llm-d-blog.md                         -     The write-up of the experiments, with charts.
+#   images/                               -     Charts used in the blog (PNG).
+#   results/                              -     Benchmark JSON and logs per test (kill, nokill, flowcontrol, flowcontrol-control,
+#                                               exp1-rerun, doubling-test, scaling-sweep), REPORT.md, and make_charts.py to redraw the charts.
+
+# ---------------------------------------------------------------------------
+# 0. Check you are on the right cluster
+# ---------------------------------------------------------------------------
+kubectl config current-context
+kubectl get nodes
+# Expect: the context you intend to deploy to, and Ready nodes with GPUs.
+
+# ---------------------------------------------------------------------------
+# 1. Gateway API CRDs (cluster-wide; --server-side is required, the CRDs are large)
+# ---------------------------------------------------------------------------
+kubectl apply --server-side -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.7.0/standard-install.yaml
+# Expect: "serverside-applied" lines, no errors.
+
+# ---------------------------------------------------------------------------
+# 2. Inference Extension CRDs (InferencePool etc., cluster-wide)
+# ---------------------------------------------------------------------------
+kubectl apply -f "https://github.com/kubernetes-sigs/gateway-api-inference-extension/releases/download/v1.6.2/v1-manifests.yaml"
+kubectl get crd | grep -i inference
+# Expect: inferencepools CRDs listed.
+
+# ---------------------------------------------------------------------------
+# 3. Namespace
+# ---------------------------------------------------------------------------
+kubectl create namespace llmd --dry-run=client -o yaml | kubectl apply -f -
+# Expect: namespace/llmd created (or unchanged).
+
+# ---------------------------------------------------------------------------
+# 4. Hugging Face token secret
+#    secret.yaml in this folder is a template. Do NOT commit a real token to it.
+#    Preferred: create the secret directly (the name must be hf-token-secret, key "token").
+# ---------------------------------------------------------------------------
+kubectl -n llmd create secret generic hf-token-secret \
+  --from-literal=token='<YOUR_HF_TOKEN>' --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n llmd get secret hf-token-secret
+# Expect: the secret listed with 1 data item.
+
+# ---------------------------------------------------------------------------
+# 5. vLLM pods (2 replicas) and the headless service
+#    First start downloads the model weights into each pod's PVC and can take several minutes.
+# ---------------------------------------------------------------------------
+kubectl apply -f statefulset.yaml
+kubectl -n llmd rollout status sts/vllm-learn --timeout=30m
+kubectl -n llmd get pods -o wide
+# Expect: vllm-learn-0 and vllm-learn-1 are 1/1 Running on GPU nodes.
+# If a pod stays Pending: kubectl -n llmd describe pod vllm-learn-1 (look for
+# If a pod crash-loops: kubectl -n llmd logs vllm-learn-0 (bad token or not enough GPU memory).
+
+# ---------------------------------------------------------------------------
+# 6. llm-d router (Envoy + endpoint picker), standalone chart
+# ---------------------------------------------------------------------------
+helm install qwen \
+  oci://ghcr.io/llm-d/charts/llm-d-router-standalone \
+  -f base.values.yaml \
+  -f optimized-baseline.values.yaml \
+  -n llmd --version v1.0.0
+kubectl -n llmd rollout status deploy/qwen-epp --timeout=5m
+kubectl -n llmd get pods | grep qwen-epp
+# Expect: qwen-epp is 2/2 Running (containers: envoy-proxy and epp).
+# Later config changes: helm upgrade qwen <same chart> -f base.values.yaml -f optimized-baseline.values.yaml -n llmd --version v1.0.0
+
+# ---------------------------------------------------------------------------
+# 7. InferenceObjective / InferenceModelRewrite CRDs, then the examples
+#    The EPP only looks for these CRDs at startup, so restart it after installing them.
+# ---------------------------------------------------------------------------
+kubectl apply -f https://github.com/llm-d/llm-d-router/releases/download/v1.0.0/manifests.yaml
+kubectl -n llmd rollout restart deploy/qwen-epp
+kubectl -n llmd rollout status deploy/qwen-epp --timeout=5m
+kubectl apply -f llm-d-crd-examples.yaml
+kubectl -n llmd get inferenceobjectives,inferencemodelrewrites
+# Expect: objectives "interactive" and "batch", rewrite "qwen-alias".
+
+# ---------------------------------------------------------------------------
+# 8. Verify through the router (from inside the cluster)
+# ---------------------------------------------------------------------------
+kubectl run curl-debug --rm -it --restart=Never \
+  --image=cfmanteiga/alpine-bash-curl-jq -n llmd -- /bin/bash
+# then, inside that shell:
+curl -s http://qwen-epp.llmd.svc/v1/models | jq '.data[].id'
+curl -s -X POST http://qwen-epp.llmd.svc/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"model": "Qwen/Qwen3-32B-AWQ", "messages": [{"role": "user", "content": "Say hello"}], "max_tokens": 32}' | jq '.choices[0].message.content'
+# Expect: the model id listed, and a short reply with no <think> block.
+# Alias check: repeat with "model": "qwen". It works through the qwen-alias rewrite.
+
+# ---------------------------------------------------------------------------
+# 9. Ingress, metrics and chat UI (optional)
+#    Edit the host in ingress.yaml first. It has no TLS and no authentication.
+#    Do not expose it outside a trusted network as it is.
+# ---------------------------------------------------------------------------
+kubectl apply -f ingress.yaml
+kubectl apply -f podMonitory.yaml     # needs Prometheus Operator CRDs
+kubectl apply -f app/app.yaml         # Streamlit chat UI, image sagar27/llmpythonchat:v2 (built from app/Dockerfile)
+curl -s http://llm.test.com/v1/models | jq '.data[].id'
+# Expect: the same model list through the ingress.
+# (kustomization.yaml applies secret.yaml, statefulset.yaml, ingress.yaml, podMonitory.yaml and
+#  app/app.yaml together with: kubectl apply -k .  Use the steps above on a first install.)
+
+# ---------------------------------------------------------------------------
+# 10. Benchmarks (optional). Each job sends load to the llmd namespace and sleeps 1 h so you can copy results.
+# ---------------------------------------------------------------------------
+kubectl apply -f bench-doubling-job.yaml      # also: bench-scaling-job.yaml, bench-flowcontrol-job.yaml, ...
+kubectl -n llmd logs -f job/vllm-bench-doubling
+kubectl -n llmd cp <bench-pod-name>:/results ./results/<name>
+kubectl -n llmd delete job vllm-bench-doubling
+# Results from this POC are in results/ and the write-up is in llm-d-blog.md.
+
+# ---------------------------------------------------------------------------
+# KNOWN SETTINGS TO REVIEW
+#   - statefulset.yaml has --served-model-name "qwen" "Qwen/Qwen3-32B-AWQ". Applying it restarts both pods.
+#   - optimized-baseline.values.yaml: maxConcurrency (256) is not tuned; priority objectives showed
+#     no effect in our test. Update it whenever the replica count changes.
+#   - statefulset.yaml: the node affinity block is commented out. Enable it only to pin pods to a node.
+#   - Envoy's route timeout is fixed at 86400 s in the chart and has no retries; put retries in clients.
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# ROLLBACK / CLEANUP (namespace-scoped; do NOT delete the cluster-wide CRDs, others may use them)
+# ---------------------------------------------------------------------------
+# kubectl delete -f app/app.yaml -f podMonitory.yaml -f ingress.yaml
+# kubectl delete -f llm-d-crd-examples.yaml
+# helm uninstall qwen -n llmd
+# kubectl delete -f statefulset.yaml
+# kubectl -n llmd delete pvc model-cache-vllm-learn-0 model-cache-vllm-learn-1   # deletes cached model weights; they re-download on next start
+# kubectl -n llmd delete secret hf-token-secret

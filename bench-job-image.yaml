@@ -1,0 +1,38 @@
+# Not applied automatically. Runs bench.py from sagar27/vllmbenchmarking against the existing
+# vllm-learn StatefulSet (pod vllm-learn-0 via the headless Service). No GPU, no HF token needed.
+# Edit the args below to change the test (see README).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: vllm-bench-custom
+  namespace: llmd
+  labels:
+    app: vllm-bench
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: vllm-bench
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: bench
+        image: sagar27/vllmbenchmarking:v1
+        imagePullPolicy: IfNotPresent
+        args:
+        - "--base-url=http://qwen-epp.llmd.svc.cluster.local"
+        - "--model=Qwen/Qwen3-32B-AWQ"
+        - "--concurrency=1,2,4,8,16,32,64,128"
+        - "--input-len=512"
+        - "--output-len=128"
+        - "--out-dir=/results"
+        resources:
+          requests: {cpu: 500m, memory: 256Mi}
+          limits: {cpu: "1", memory: 512Mi}
+        volumeMounts:
+        - {name: results, mountPath: /results}
+      volumes:
+      - name: results
+        emptyDir: {}

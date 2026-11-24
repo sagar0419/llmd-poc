@@ -1,0 +1,102 @@
+# Does 2 pods on the same GPU model double throughput?
+# Phases (repeated REPS times), all at saturation (128 in flight per pod = --max-num-seqs):
+#   P1 pod0 direct        -> single-pod capacity, no router
+#   P2 pod1 direct        -> proves both pods are equal
+#   P3 pod0+pod1 direct, in parallel -> 2-pod ceiling, no router
+#   P4 router, 1 client, 256 in flight
+#   P5 router, 2 clients in parallel, 128 in flight each (rules out a single-client cap)
+# Per phase it logs: wall time, per-pod completed-request deltas (load split), client CPU use.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: vllm-bench-doubling
+  namespace: llmd
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vllm-bench-doubling
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: bench
+        image: vllm/vllm-openai:v0.34.0
+        imagePullPolicy: IfNotPresent
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          set -u
+          POD0=http://vllm-learn-0.vllm-learn-headless.llmd.svc:8000
+          POD1=http://vllm-learn-1.vllm-learn-headless.llmd.svc:8000
+          ROUTER=http://qwen-epp.llmd.svc
+          N=1536
+
+          snap() {  # snap <label>: completed requests per pod from vLLM's own counters
+            for i in 0 1; do
+              python3 -c "
+          import urllib.request,re,sys
+          t=urllib.request.urlopen('http://vllm-learn-$i.vllm-learn-headless.llmd.svc:8000/metrics').read().decode()
+          s=sum(float(m) for m in re.findall(r'^vllm:request_success_total\{[^}]*\} (\S+)',t,re.M))
+          print('SNAP $1 pod$i success=%d'%s)"
+            done
+          }
+          cpu() { awk '/usage_usec/{print $2}' /sys/fs/cgroup/cpu.stat; }
+
+          # bench <name> <url> <concurrency> <prompts> <seed>
+          bench() {
+            timeout 1500 vllm bench serve \
+              --backend openai-chat --endpoint /v1/chat/completions \
+              --base-url "$2" --model Qwen/Qwen3-32B-AWQ \
+              --dataset-name random --random-input-len 512 --random-output-len 128 \
+              --num-prompts "$4" --request-rate inf --max-concurrency "$3" \
+              --seed "$5" \
+              --percentile-metrics ttft,tpot,itl,e2el,client_queue_time \
+              --save-result --result-dir /results --result-filename "$1.json" \
+              > "/results/$1.log" 2>&1 || echo "!!! $1 failed or timed out"
+          }
+
+          phase() {  # phase <label> then the bench commands are run by the caller
+            echo ">>> PHASE $1 start $(date -u +%T)"; snap "$1-before"; T0=$(date +%s); C0=$(cpu)
+          }
+          endphase() {
+            T1=$(date +%s); C1=$(cpu); snap "$1-after"
+            echo ">>> PHASE $1 end $(date -u +%T) wall_s=$((T1-T0)) client_cpu_cores_avg=$(python3 -c "print(round(($C1-$C0)/1e6/($T1-$T0),2))")"
+          }
+
+          for rep in 1 2; do
+            S=$((rep*1000))
+            phase r${rep}_P1_pod0_direct;     bench r${rep}_P1 $POD0 128 $N $((S+1)); endphase r${rep}_P1_pod0_direct
+            phase r${rep}_P2_pod1_direct;     bench r${rep}_P2 $POD1 128 $N $((S+2)); endphase r${rep}_P2_pod1_direct
+            phase r${rep}_P3_both_direct
+            bench r${rep}_P3_pod0 $POD0 128 $N $((S+3)) &
+            bench r${rep}_P3_pod1 $POD1 128 $N $((S+4)) &
+            wait; endphase r${rep}_P3_both_direct
+            phase r${rep}_P4_router_1client;  bench r${rep}_P4 $ROUTER 256 $((N*2)) $((S+5)); endphase r${rep}_P4_router_1client
+            phase r${rep}_P5_router_2clients
+            bench r${rep}_P5_a $ROUTER 128 $N $((S+6)) &
+            bench r${rep}_P5_b $ROUTER 128 $N $((S+7)) &
+            wait; endphase r${rep}_P5_router_2clients
+          done
+          echo ">>> done; results in /results (sleeping 1h so they can be copied with kubectl cp)"
+          sleep 3600
+        env:
+        - name: HUGGING_FACE_HUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-token-secret
+              key: token
+        resources:
+          requests:
+            cpu: "4"
+            memory: 8Gi
+          limits:
+            cpu: "8"
+            memory: 16Gi
+        volumeMounts:
+        - name: results
+          mountPath: /results
+      volumes:
+      - name: results
+        emptyDir: {}

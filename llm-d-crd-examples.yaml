@@ -1,0 +1,90 @@
+# Examples only; not in kustomization.yaml.
+#
+# 0) Prerequisites (one-time)
+#    kubectl apply -f https://github.com/llm-d/llm-d-router/releases/download/v1.0.0/manifests.yaml
+#    kubectl -n llmd rollout restart deploy/qwen-epp    # EPP checks for the CRDs only at startup
+#
+# 1) Apply this file
+#    kubectl apply -f llm-d-crd-examples.yaml
+#    kubectl -n llmd get inferenceobjectives,inferencemodelrewrites     # expect Accepted=True
+#
+# 2) Use them (from inside the cluster, e.g. the curl-debug pod)
+#
+#    a) InferenceObjective: the client picks it per request with a header.
+#       curl http://qwen-epp.llmd.svc/v1/chat/completions \
+#         -H 'Content-Type: application/json' \
+#         -H 'x-llm-d-inference-objective: interactive' \
+#         -d '{"model":"Qwen/Qwen3-32B-AWQ","messages":[{"role":"user","content":"hi"}]}'
+#       Priority only has an effect when flow control is enabled in the EPP config
+#       (featureGates: [flowControl]; see the commented values snippet at the bottom) and the pool is saturated.
+#       Rejected requests return 429/503 with the header x-llm-d-request-dropped-reason.
+#
+#    b) InferenceModelRewrite: no header needed. Send the alias; the EPP rewrites it.
+#       curl http://qwen-epp.llmd.svc/v1/chat/completions \
+#         -H 'Content-Type: application/json' \
+#         -d '{"model":"qwen","messages":[{"role":"user","content":"hi"}]}'
+#
+# Per-request override without the CRD: header x-llm-d-model-name-rewrite: Qwen/Qwen3-32B-AWQ
+apiVersion: llm-d.ai/v1
+kind: InferenceObjective
+metadata:
+  name: interactive
+  namespace: llmd
+spec:
+  # Higher wins under load; negative values mark sheddable traffic.
+  priority: 100
+  poolRefs:
+  - name: qwen
+---
+apiVersion: llm-d.ai/v1
+kind: InferenceObjective
+metadata:
+  name: batch
+  namespace: llmd
+spec:
+  # Dropped first when the pool is saturated.
+  priority: -10
+  poolRefs:
+  - name: qwen
+---
+apiVersion: llm-d.ai/v1alpha2
+kind: InferenceModelRewrite
+metadata:
+  name: qwen-alias
+  namespace: llmd
+spec:
+  poolRef:
+    name: qwen
+  rules:
+  # Clients can send model "qwen"; it is rewritten to the served model name.
+  - matches:
+    - model:
+        type: Exact
+        value: qwen
+    targets:
+    - modelRewrite: Qwen/Qwen3-32B-AWQ
+      weight: 100
+---
+# Weighted split example (canary) - only meaningful if the pool serves both models. Remove it if not.
+# apiVersion: llm-d.ai/v1alpha2
+# kind: InferenceModelRewrite
+# metadata: {name: qwen-canary, namespace: llmd}
+# spec:
+#   poolRef: {name: qwen}
+#   rules:
+#   - matches: [{model: {type: Exact, value: qwen-canary}}]
+#     targets:
+#     - {modelRewrite: Qwen/Qwen3-32B-AWQ, weight: 90}
+#     - {modelRewrite: <new-model-name>, weight: 10}
+#
+# Flow control for priorities, added to optimized-baseline.values.yaml under router.epp.pluginsCustomConfig
+# (merge into the existing EndpointPickerConfig; values from the llm-d flow-control tuning guide, not tested here):
+#   featureGates:
+#   - flowControl
+#   plugins:
+#   - type: concurrency-detector
+#     parameters: {maxConcurrency: 128, headroom: 0.0}   # roughly your --max-num-seqs x replicas
+#   flowControl:
+#     saturationDetector: {pluginRef: concurrency-detector}
+#     maxRequests: 200
+#     maxBytes: "10Gi"

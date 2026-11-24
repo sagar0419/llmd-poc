@@ -1,0 +1,3 @@
+{"severity_text":"INFO","timestamp":"2026-11-21T18:41:44.922208509Z","logger":"controller-runtime.cache","caller":"rest/warnings.go:107","body":"Warning: llm-d.ai/v1alpha2 InferenceObjective is deprec
+{"severity_text":"INFO","timestamp":"2026-11-21T18:48:02.222423422Z","caller":"requestcontrol/director.go:359","body":"Warning: parser does not implement ModelNameRewriter, skipping model rewrite","se
+{"severity_text":"ERROR","timestamp":"2026-11-21T18:48:02.222518675Z","caller":"requestcontrol/director.go:300","body":"failed to prepare per request data","service.name":"llm-d-epp","x-request-id":"b

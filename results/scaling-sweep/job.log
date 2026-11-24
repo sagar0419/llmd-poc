@@ -1,0 +1,15 @@
+>>> pod0 concurrency=16 prompts=1024 05:06:17
+>>> pod0 concurrency=32 prompts=1024 05:10:48
+>>> pod0 concurrency=64 prompts=1024 05:13:58
+>>> pod0 concurrency=96 prompts=1024 05:16:37
+>>> pod0 concurrency=128 prompts=1024 05:19:06
+>>> pod0 concurrency=192 prompts=1536 05:21:28
+>>> pod0 concurrency=256 prompts=2048 05:24:54
+>>> router concurrency=16 prompts=1024 05:29:28
+>>> router concurrency=32 prompts=1024 05:33:08
+>>> router concurrency=64 prompts=1024 05:35:30
+>>> router concurrency=128 prompts=1024 05:37:18
+>>> router concurrency=192 prompts=1536 05:38:45
+>>> router concurrency=256 prompts=2048 05:40:41
+>>> router concurrency=384 prompts=3072 05:43:06
+>>> done; results in /results (sleeping 1h so they can be copied with kubectl cp)

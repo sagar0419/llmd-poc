@@ -1,0 +1,15 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: vllm-learn-monitor
+  namespace: llmd
+  labels:
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vllm-learn
+  podMetricsEndpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
